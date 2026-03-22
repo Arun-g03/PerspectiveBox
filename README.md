@@ -5,7 +5,11 @@ Windows-only prototype: webcam head tracking (MediaPipe) drives an off-axis view
 # Why make this?
 
 This program was created mostly for fun—it isn’t intended to solve any real single-screen or multi-screen issues. Most PCs today support multiple desktops and allow you to switch between them, or you can simply have many apps or tabs open and switch as needed. What this program offers is the ability to use a single screen to view multiple windows at the same time, effectively increasing the amount of information you can take in on a single display.
+![Example image 1](Docs/Images/Screenshot%202026-03-22%20002551.png)
 
+![Example image 2](Docs/Images/Screenshot%202026-03-22%20002603.png)
+
+![Example image 3](Docs/Images/Screenshot%202026-03-22%20002622.png)
 ## Requirements
 
 - Windows 10+
