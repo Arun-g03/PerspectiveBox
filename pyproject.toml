@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perspectivebox"
+version = "0.1.0"
+description = "Head-coupled perspective desktop portal (Windows)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "mediapipe>=0.10.14",
+    "opencv-python>=4.8.0",
+    "bettercam>=1.0.0",
+    "screeninfo>=0.8.1",
+    "moderngl>=5.8.0",
+    "glfw>=2.6.0",
+    "pynput>=1.7.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+perspectivebox = "perspectivebox.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
