@@ -4,7 +4,14 @@ import sys
 
 import numpy as np
 
-from perspectivebox.capture.monitors import CaptureTarget, load_capture_targets, wall_source_indices
+from perspectivebox.capture.letterbox import letterbox_to_size
+from perspectivebox.capture.monitors import (
+    CaptureTarget,
+    load_capture_targets,
+    split_monitor_into_wall_regions,
+    wall_source_indices,
+)
+from perspectivebox.geometry_display import DISPLAY_HEIGHT, DISPLAY_WIDTH
 
 try:
     import bettercam
@@ -61,12 +68,32 @@ class MultiMonitorCapture:
             )
             self._cams.append(cam)
         self._li, self._bi, self._ri = wall_source_indices(len(self.targets))
-        print(
-            f"PerspectiveBox: {len(self.targets)} display(s); "
-            f"walls left/back/right use monitor indices "
-            f"{self._li}/{self._bi}/{self._ri} (left-to-right order).",
-            file=sys.stderr,
-        )
+        self._single_regions: tuple[CaptureTarget, CaptureTarget, CaptureTarget] | None = None
+        n = len(self.targets)
+        if n == 1:
+            self._single_regions = split_monitor_into_wall_regions(self.targets[0])
+            print(
+                "PerspectiveBox: 1 display; single-monitor region split (L/C/R thirds).",
+                file=sys.stderr,
+            )
+            print(
+                "PerspectiveBox: for full-resolution walls, add 2 virtual displays "
+                "(see Docs/VirtualDisplays.md).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"PerspectiveBox: {n} display(s); "
+                f"walls left/back/right use monitor indices "
+                f"{self._li}/{self._bi}/{self._ri} (left-to-right order).",
+                file=sys.stderr,
+            )
+            if n < 3:
+                print(
+                    "PerspectiveBox: fewer than 3 displays — some walls share a monitor. "
+                    "Install virtual displays for L/C/R (see Docs/VirtualDisplays.md).",
+                    file=sys.stderr,
+                )
 
     def close(self) -> None:
         for cam in self._cams:
@@ -83,14 +110,16 @@ class MultiMonitorCapture:
         self,
         exclude_rect: tuple[int, int, int, int] | None = None,
     ) -> tuple[
-        tuple[np.ndarray | None, CaptureTarget],
-        tuple[np.ndarray | None, CaptureTarget],
-        tuple[np.ndarray | None, CaptureTarget],
+        tuple[np.ndarray | None, CaptureTarget, dict],
+        tuple[np.ndarray | None, CaptureTarget, dict],
+        tuple[np.ndarray | None, CaptureTarget, dict],
     ]:
         """
-        Returns ((rgb_left, target_left), (rgb_back, target_back), (rgb_right, target_right)).
-        Each rgb is HxWx3 or None if grab failed for that source monitor.
-        exclude_rect: global desktop (left, top, right, bottom) to black out (recursion guard).
+        Returns ((rgb, target, click_meta), ...) for left / back / right.
+
+        click_meta maps wall UVs to global desktop pixels (supports letterboxing).
+        exclude_rect: global desktop (left, top, right, bottom) to black out when
+        the portal cannot be excluded from capture via Win32 affinity.
         """
         frames: list[np.ndarray | None] = []
         for cam in self._cams:
@@ -102,8 +131,87 @@ class MultiMonitorCapture:
                 if frames[i] is not None:
                     _apply_mask_local(frames[i], exclude_rect, t)
 
-        def pick(idx: int) -> tuple[np.ndarray | None, CaptureTarget]:
+        if self._single_regions is not None:
+            frame = frames[0] if frames else None
+            left_t, back_t, right_t = self._single_regions
+            if frame is None:
+                empty = {
+                    "gx": 0,
+                    "gy": 0,
+                    "rw": 1,
+                    "rh": 1,
+                    "tex_w": 1,
+                    "tex_h": 1,
+                    "content_x": 0,
+                    "content_y": 0,
+                    "content_w": 1,
+                    "content_h": 1,
+                }
+                return (
+                    (None, left_t, dict(empty)),
+                    (None, back_t, dict(empty)),
+                    (None, right_t, dict(empty)),
+                )
+            mon = self.targets[0]
+            # Frame-local x relative to the full monitor; region targets use global coords.
+            x1 = left_t.right - mon.left
+            x2 = back_t.right - mon.left
+            crops = (
+                (np.ascontiguousarray(frame[:, :x1]), left_t),
+                (np.ascontiguousarray(frame[:, x1:x2]), back_t),
+                (np.ascontiguousarray(frame[:, x2:]), right_t),
+            )
+            out = []
+            for crop, tgt in crops:
+                canvas, ox, oy, cw, ch = letterbox_to_size(
+                    crop, int(DISPLAY_WIDTH), int(DISPLAY_HEIGHT)
+                )
+                meta = {
+                    "gx": int(tgt.left),
+                    "gy": int(tgt.top),
+                    "rw": int(tgt.width),
+                    "rh": int(tgt.height),
+                    "tex_w": int(canvas.shape[1]),
+                    "tex_h": int(canvas.shape[0]),
+                    "content_x": int(ox),
+                    "content_y": int(oy),
+                    "content_w": int(cw),
+                    "content_h": int(ch),
+                }
+                out.append((canvas, tgt, meta))
+            return (out[0], out[1], out[2])
+
+        def pick(idx: int) -> tuple[np.ndarray | None, CaptureTarget, dict]:
             idx = min(idx, len(self.targets) - 1)
-            return (frames[idx], self.targets[idx])
+            rgb = frames[idx]
+            tgt = self.targets[idx]
+            if rgb is None:
+                meta = {
+                    "gx": int(tgt.left),
+                    "gy": int(tgt.top),
+                    "rw": 1,
+                    "rh": 1,
+                    "tex_w": 1,
+                    "tex_h": 1,
+                    "content_x": 0,
+                    "content_y": 0,
+                    "content_w": 1,
+                    "content_h": 1,
+                }
+            else:
+                h0, w0 = rgb.shape[:2]
+                meta = {
+                    "gx": int(tgt.left),
+                    "gy": int(tgt.top),
+                    "rw": int(w0),
+                    "rh": int(h0),
+                    "tex_w": int(w0),
+                    "tex_h": int(h0),
+                    "content_x": 0,
+                    "content_y": 0,
+                    "content_w": int(w0),
+                    "content_h": int(h0),
+                }
+            return (rgb, tgt, meta)
 
         return (pick(self._li), pick(self._bi), pick(self._ri))

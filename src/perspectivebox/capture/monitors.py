@@ -75,11 +75,56 @@ def load_capture_targets() -> list[CaptureTarget]:
     return targets
 
 
+def split_monitor_into_wall_regions(
+    target: CaptureTarget,
+) -> tuple[CaptureTarget, CaptureTarget, CaptureTarget]:
+    """
+    Split one physical output into three equal vertical thirds.
+
+    Returns (left_wall, back_wall, right_wall) region targets sharing the
+    same device/output indices; ``left``/``right`` differ so click mapping
+    uses each region's global origin.
+    """
+    w = target.width
+    if w <= 0:
+        raise ValueError("CaptureTarget width must be positive")
+    # Integer boundaries: left [0, x1), back [x1, x2), right [x2, w) with no gaps/overlap.
+    x1 = w // 3
+    x2 = (2 * w) // 3
+    left = CaptureTarget(
+        device_idx=target.device_idx,
+        output_idx=target.output_idx,
+        left=target.left,
+        top=target.top,
+        right=target.left + x1,
+        bottom=target.bottom,
+    )
+    back = CaptureTarget(
+        device_idx=target.device_idx,
+        output_idx=target.output_idx,
+        left=target.left + x1,
+        top=target.top,
+        right=target.left + x2,
+        bottom=target.bottom,
+    )
+    right = CaptureTarget(
+        device_idx=target.device_idx,
+        output_idx=target.output_idx,
+        left=target.left + x2,
+        top=target.top,
+        right=target.right,
+        bottom=target.bottom,
+    )
+    return (left, back, right)
+
+
 def wall_source_indices(num_monitors: int) -> tuple[int, int, int]:
     """
     Map sorted monitor index → (left_wall, back_wall, right_wall).
 
-    1 monitor: all walls show the same desktop.
+    Used only when there are 2+ monitors. With 1 monitor, ``MultiMonitorCapture``
+    splits that output into L/C/R regions instead (see ``split_monitor_into_wall_regions``).
+
     2 monitors: left | back+left duplicate | right.
     3+: left-most, center, right-most among the first three.
     """

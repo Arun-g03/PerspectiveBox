@@ -7,6 +7,7 @@ import glfw
 import moderngl
 import numpy as np
 
+from perspectivebox.capture.letterbox import wall_uv_to_region_pixel
 from perspectivebox.capture.multi_desktop import MultiMonitorCapture
 from perspectivebox.geometry_display import HALF_X, HALF_Y
 from perspectivebox.input_bridge.events import click_screen
@@ -15,10 +16,14 @@ from perspectivebox.projection.off_axis import head_to_view_proj
 from perspectivebox.render.scene import CubeScene
 from perspectivebox.tracking.face_track import FaceTracker
 from perspectivebox.ui.sensitivity_panel import try_open_head_sensitivity_ui
+from perspectivebox.ui.win32_window import (
+    clear_window_capture_affinity,
+    try_exclude_window_from_capture,
+)
 
-# Portal size (16:9, typical FHD capture aspect).
-WINDOW_WIDTH = 1920
-WINDOW_HEIGHT = 1080
+# Portal size (16:9). Kept below full desktop so single-monitor L/C/R zones stay visible.
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
 
 # Mouse wheel → exp(zoom_log); larger log = zoom in.
 ZOOM_SCROLL_STEP = 0.12
@@ -48,6 +53,21 @@ def run() -> None:
     glfw.make_context_current(window)
     glfw.swap_interval(1)
 
+    # Prefer OS exclude-from-capture so desktop behind the portal stays visible
+    # (blacking the window rect was wiping most single-monitor wall content).
+    capture_excluded = try_exclude_window_from_capture(window)
+    if capture_excluded:
+        print(
+            "PerspectiveBox: portal excluded from capture (content behind window visible).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "PerspectiveBox: could not exclude portal from capture; "
+            "using black mask fallback.",
+            file=sys.stderr,
+        )
+
     ctx = moderngl.create_context()
     ctx.enable(moderngl.DEPTH_TEST)
     ctx.gc_mode = "auto"
@@ -71,11 +91,7 @@ def run() -> None:
         "view": np.eye(4, dtype=np.float64),
         "proj": np.eye(4, dtype=np.float64),
         # Per-wall click mapping: index matches raycast wall_id (0=back,1=left,2=right).
-        "wall_click": [
-            {"w": 1, "h": 1, "gx": 0, "gy": 0},
-            {"w": 1, "h": 1, "gx": 0, "gy": 0},
-            {"w": 1, "h": 1, "gx": 0, "gy": 0},
-        ],
+        "wall_click": [None, None, None],
         "zoom_log": 0.0,
         "pan_x": 0.0,
         "pan_y": 0.0,
@@ -100,9 +116,23 @@ def run() -> None:
             return
         wall_id, u, v = hit
         meta = state["wall_click"][wall_id]
-        mw, mh = max(meta["w"], 1), max(meta["h"], 1)
-        lx = int(np.clip(u * (mw - 1), 0, mw - 1))
-        ly = int(np.clip((1.0 - v) * (mh - 1), 0, mh - 1))
+        if not meta:
+            return
+        local = wall_uv_to_region_pixel(
+            u,
+            v,
+            tex_w=meta["tex_w"],
+            tex_h=meta["tex_h"],
+            content_x=meta["content_x"],
+            content_y=meta["content_y"],
+            content_w=meta["content_w"],
+            content_h=meta["content_h"],
+            region_w=meta["rw"],
+            region_h=meta["rh"],
+        )
+        if local is None:
+            return
+        lx, ly = local
         px = int(meta["gx"] + lx)
         py = int(meta["gy"] + ly)
         try:
@@ -154,24 +184,16 @@ def run() -> None:
                 rmb_prev = None
 
             wx, wy = glfw.get_window_pos(window)
-            exclude = (wx, wy, wx + win_w, wy + win_h)
+            exclude = None if capture_excluded else (wx, wy, wx + win_w, wy + win_h)
 
-            (l_rgb, l_t), (b_rgb, b_t), (r_rgb, r_t) = capture.grab_walls(exclude_rect=exclude)
+            (l_rgb, _l_t, l_meta), (b_rgb, _b_t, b_meta), (r_rgb, _r_t, r_meta) = (
+                capture.grab_walls(exclude_rect=exclude)
+            )
             scene.upload_wall("left", l_rgb)
             scene.upload_wall("back", b_rgb)
             scene.upload_wall("right", r_rgb)
 
-            def _click_meta(rgb, t) -> dict:
-                if rgb is None:
-                    return {"w": 1, "h": 1, "gx": 0, "gy": 0}
-                h0, w0 = rgb.shape[:2]
-                return {"w": int(w0), "h": int(h0), "gx": int(t.left), "gy": int(t.top)}
-
-            state["wall_click"] = [
-                _click_meta(b_rgb, b_t),
-                _click_meta(l_rgb, l_t),
-                _click_meta(r_rgb, r_t),
-            ]
+            state["wall_click"] = [b_meta, l_meta, r_meta]
 
             fb_w, fb_h = glfw.get_framebuffer_size(window)
             if fb_w <= 0 or fb_h <= 0:
@@ -199,5 +221,6 @@ def run() -> None:
     finally:
         tracker.close()
         capture.close()
+        clear_window_capture_affinity(window)
         glfw.destroy_window(window)
         glfw.terminate()

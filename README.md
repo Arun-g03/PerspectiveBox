@@ -17,13 +17,25 @@ This program was created mostly for fun—it isn’t intended to solve any real 
 - Webcam
 - GPU with drivers suitable for OpenGL 3.3 Core and DXGI Desktop Duplication
 
-## Virtual environment
+## Virtual environment / project setup
 
-From the repository root:
+**One-shot setup** (venv + editable install + virtual display driver):
 
 ```powershell
-py -3.10 -m venv .venv
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
+Flags:
+
+- `-SkipVirtualDisplays` — Python only (single-monitor fallback)
+- `-PythonVersion 3.12` — pick a installed `py -X.Y` runtime (default `3.11`)
+
+Manual steps instead:
+
+```powershell
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
 ```
 
 If script activation is blocked, use Command Prompt:
@@ -32,11 +44,7 @@ If script activation is blocked, use Command Prompt:
 .\.venv\Scripts\activate.bat
 ```
 
-Install in editable mode:
-
-```powershell
-pip install -e ".[dev]"
-```
+The virtual display driver is a **Windows system package** (IddCx). It cannot live inside `.venv`; `scripts\setup.ps1` / `scripts\install_virtual_displays.ps1` install it machine-wide via winget (UAC prompt). Use `scripts\uninstall_virtual_displays.ps1` to remove it.
 
 ## Run
 
@@ -50,9 +58,37 @@ Debug head pose only (prints smoothed normalized coordinates to the terminal):
 python -m perspectivebox --debug-track
 ```
 
+## Three-wall setup (recommended)
+
+For a real extended desk (full display per wall), use **one physical monitor + two virtual displays**. See **[Docs/VirtualDisplays.md](Docs/VirtualDisplays.md)**.
+
+Install / re-install the driver only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_virtual_displays.ps1
+```
+
+Uninstall the driver (leaves `.venv` alone):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_virtual_displays.ps1
+```
+
+Verify DXGI outputs before launching:
+
+```powershell
+python scripts/check_displays.py
+```
+
+## Single monitor (fallback)
+
+With only one display, the desktop is split into three vertical thirds (left | center | right) mapped to the left / back / right walls. Each third is letterboxed onto the wall (not stretched). This is a fallback; prefer virtual displays for full walls.
+
+With three or more outputs (physical and/or virtual), each wall uses a full monitor feed (left-to-right order).
+
 ## Recursion guard
 
-The capture pipeline masks out the portal window’s screen rectangle in the grabbed frame (filled black) so the texture does not feed back into itself (“hall of mirrors”). For best results, keep the window unobstructed by other apps in that screen region, or use a multi-monitor setup.
+The portal window is excluded from Desktop Duplication when the OS allows it (`WDA_EXCLUDEFROMCAPTURE`), so capture shows whatever is behind the window instead of a black rectangle. If that fails, the pipeline falls back to masking out the portal’s screen rectangle.
 
 ## Safety
 
@@ -60,4 +96,4 @@ Synthetic mouse input may not reach elevated (Run as administrator) applications
 
 # Future
 
-Add a way to create virtual desktops
+Windows Task View / OS virtual *desktops* (separate from virtual *displays*) remain out of scope; for extra screens use [Docs/VirtualDisplays.md](Docs/VirtualDisplays.md).
